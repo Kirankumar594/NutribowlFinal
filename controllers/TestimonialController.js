@@ -33,19 +33,64 @@ export const createTestimonial = async (req, res) => {
 };
 
 // PUT update an existing testimonial
+// export const updateTestimonial = async (req, res) => {
+//   try {
+//     const { id } = req.params;
+//     const { name, feedback, rating } = req.body;
+//     const image = await uploadFile2(req.file, "testimonial");
+
+//     const updatedData = {
+//       name,
+//       feedback,
+//       rating,
+//     };
+
+//     if (image) updatedData.image = image;
+
+//     const updated = await Testimonial.findByIdAndUpdate(id, updatedData, {
+//       new: true,
+//     });
+
+//     res.json(updated);
+//   } catch (err) {
+//     res.status(400).json({ message: err.message });
+//   }
+// };
+
 export const updateTestimonial = async (req, res) => {
   try {
     const { id } = req.params;
     const { name, feedback, rating } = req.body;
-    const image = await uploadFile2(req.file, "testimonial");
+    
+    // Get the current testimonial first
+    const existingTestimonial = await Testimonial.findById(id);
+    if (!existingTestimonial) {
+      return res.status(404).json({ message: "Testimonial not found" });
+    }
 
     const updatedData = {
       name,
       feedback,
       rating,
+      image: existingTestimonial.image, // Keep existing image by default
     };
 
-    if (image) updatedData.image = image;
+    // Only process image if a new file was uploaded
+    if (req.file) {
+      const image = await uploadFile2(req.file, "testimonial");
+      if (image) {
+        updatedData.image = image;
+        
+        // Delete old image from S3 if it exists
+        if (existingTestimonial.imageKey) {
+          try {
+            await deleteFile(existingTestimonial.imageKey);
+          } catch (deleteError) {
+            console.error("Error deleting old image:", deleteError);
+          }
+        }
+      }
+    }
 
     const updated = await Testimonial.findByIdAndUpdate(id, updatedData, {
       new: true,
@@ -53,6 +98,7 @@ export const updateTestimonial = async (req, res) => {
 
     res.json(updated);
   } catch (err) {
+    console.error("Update Testimonial Error:", err);
     res.status(400).json({ message: err.message });
   }
 };

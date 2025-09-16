@@ -518,15 +518,29 @@ export const updateMenuItem = async (req, res) => {
 
     // Handle image update
     let imageUrl = item.image;
+    let imageKey = item.imageKey; // Assuming you store the S3 key separately
+
     if (req.file) {
       try {
         // Upload new image
-        imageUrl = await processImageUpload(req.file, "menu-items");
+        const awsResponse = await processImageUpload(req.file, "menu-items");
         
-        // Delete old image from S3 if it exists
-        if (item.image) {
+        // Handle both string and object responses from processImageUpload
+        if (typeof awsResponse === 'string') {
+          imageUrl = awsResponse;
+          const urlParts = awsResponse.split('/');
+          imageKey = urlParts.slice(3).join('/'); // Extract key from URL
+        } else if (awsResponse && awsResponse.Location) {
+          imageUrl = awsResponse.Location;
+          imageKey = awsResponse.Key;
+        } else {
+          throw new Error('Invalid response from image upload service');
+        }
+        
+        // Delete old image from S3 if it exists (using the key, not URL)
+        if (item.imageKey) {
           try {
-            await deleteFile(item.image);
+            await deleteFile(item.imageKey);
           } catch (deleteError) {
             console.warn('Failed to delete old image from S3:', deleteError.message);
             // Continue with update even if old image deletion fails
@@ -556,7 +570,8 @@ export const updateMenuItem = async (req, res) => {
       ingredients,
       allergens,
       isActive: isActive !== undefined ? isActive : item.isActive,
-      image: imageUrl
+      image: imageUrl,
+      imageKey: imageKey // Make sure to store the S3 key
     };
 
     const updatedItem = await MenuItem.findByIdAndUpdate(
