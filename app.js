@@ -25,7 +25,7 @@ import contactRouter from './routes/contactRoutes.js';
 
 import planRoutes from './routes/planRoutes.js'
 
-
+import PhonepeRoutes from "./routes/PhonepeRoutes.js"
 
 import menuRouter from './routes/menuRoutes.js'
 
@@ -70,7 +70,8 @@ app.use('/api/mealplan', mealRoutes)
 app.use("/api/weight-gain-meals", weightGainMealRoutes);
 app.use("/api/weight-loss-meals", weightLossMealRoutes);
 
-app.use("/api/plans", planRoutes);
+app.use("/api/plans", planRoutes); 
+app.use('/api/user',PhonepeRoutes)
 
 
 // app.use('/api/auth', authRouter);
