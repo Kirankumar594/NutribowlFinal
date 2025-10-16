@@ -98,10 +98,13 @@ app.use('/uploads', express.static('uploads'));
 // });
 app.use(express.static(path.join(_dirname, 'build'))); // Change 'build' to your frontend folder if needed
 
-// Redirect all requests to the index.html file
-
+// Redirect all GET requests (except API routes) to the index.html file
 app.get("*", (req, res) => {
-  return  res.sendFile(path.join(_dirname, 'build', 'index.html'));
+  // Don't redirect API routes
+  if (req.path.startsWith('/api/')) {
+    return res.status(404).json({ error: 'API endpoint not found' });
+  }
+  return res.sendFile(path.join(_dirname, 'build', 'index.html'));
 });
 // Error handling middleware
 app.use((err, req, res, next) => {

@@ -5,7 +5,7 @@ import crypto from 'crypto';
 const MERCHANT_ID = "M23XA8YTUO61B";
 const SECRET_KEY = "3079f6a3-6f25-4c47-bd4e-c581051ad263";  
 const PHONEPE_API_URL = "https://api.phonepe.com/apis/hermes/pg/v1/pay"; 
-const CALLBACK_URL = "https://nutribowl.org";  
+const CALLBACK_URL = "http://localhost:5001";  
 
 import transactionModel from "../models/PhonepeModel.js";
 
@@ -25,19 +25,36 @@ const env = Env.PRODUCTION;
 // const env = Env.SANDBOX;
 // const CALLBACK_URL = "https://sbwears.com/update/paymentstatus/:id";
 
-const client = StandardCheckoutClient.getInstance(
-  clientId,
-  clientSecret,
-  clientVersion,
-  env
-);
+let client;
+try {
+  client = StandardCheckoutClient.getInstance(
+    clientId,
+    clientSecret,
+    clientVersion,
+    env
+  );
+  console.log("PhonePe SDK client initialized successfully");
+} catch (error) {
+  console.error("Failed to initialize PhonePe SDK client:", error);
+  client = null;
+}
 
 class Transaction {
 
   async addPaymentPhone(req, res) {
 
     try {
-      const { userId, username, Mobile, orderId, amount, config,successUrl,failedUrl } = req.body;
+      const { userId, username, Mobile, orderId, amount, config, successUrl, failedUrl } = req.body;
+
+      // Validate required fields
+      if (!userId || !username || !Mobile || !amount) {
+        return res.status(400).json({ 
+          error: "Missing required fields",
+          details: "userId, username, Mobile, and amount are required"
+        });
+      }
+
+      console.log("Creating transaction for user:", userId, "amount:", amount);
 
       // Save transaction details in DB
       const data = await transactionModel.create({
@@ -47,16 +64,31 @@ class Transaction {
         orderId,
         amount,
         config,
-        successUrl,failedUrl
+        successUrl,
+        failedUrl
       });
 
-      if (!data)
-        return res.status(400).json({ error: "Something went wrong" });
+      if (!data) {
+        console.error("Failed to create transaction record");
+        return res.status(400).json({ error: "Failed to create transaction record" });
+      }
+
+      console.log("Transaction created with ID:", data._id);
 
       const merchantOrderId = data._id.toString(); // Use DB _id as unique order ID
 
-      const redirectUrl = `https://nutribowl.org/PaymentSuccess?transactionId=${data._id}&userID=${userId}`;
-      // const redirectUrl = `https://sbwears.com/`;
+      const redirectUrl = `https://nutribowl.org/payment-success?transactionId=${data._id}&userID=${userId}`;
+
+      console.log("Building payment request for merchantOrderId:", merchantOrderId);
+
+      // Check if PhonePe client is initialized
+      if (!client) {
+        console.error("PhonePe SDK client not initialized");
+        return res.status(500).json({ 
+          error: "Payment service unavailable",
+          details: "PhonePe SDK client initialization failed"
+        });
+      }
 
       // Build the payment request
       const paymentRequest = CreateSdkOrderRequest.StandardCheckoutBuilder()
@@ -65,25 +97,98 @@ class Transaction {
         .redirectUrl(redirectUrl)
         .build();
 
-      // Send payment request to PhonePe
-      const response = await client.pay(paymentRequest);
-      console.log("response", response)
-      const checkoutUrl = response.redirectUrl;
+      console.log("Sending payment request to PhonePe...");
 
+      try {
+        // Try SDK approach first
+        const response = await client.pay(paymentRequest);
+        console.log("PhonePe SDK response:", response);
+        
+        const checkoutUrl = response.redirectUrl;
 
-      if (!checkoutUrl) {
-        console.error("Invalid PhonePe response:", response);
-        return res.status(500).json({ error: "PhonePe did not return a URL" });
+        if (checkoutUrl) {
+          console.log("Payment URL generated successfully via SDK:", checkoutUrl);
+          return res.status(200).json({
+            orderId: response.orderId,
+            merchantID: merchantOrderId,
+            url: checkoutUrl,
+          });
+        }
+      } catch (sdkError) {
+        console.error("PhonePe SDK failed, trying direct API approach:", sdkError.message);
       }
 
-      return res.status(200).json({
-        orderId: response.orderId,
-        merchantID: merchantOrderId,
-        url: checkoutUrl,
-      });
+      // Fallback to direct API approach
+      console.log("Using direct PhonePe API as fallback...");
+      
+      const paymentPayload = {
+        merchantId: MERCHANT_ID,
+        merchantTransactionId: merchantOrderId,
+        merchantUserId: userId,
+        amount: amount * 100, // Convert to paise
+        redirectUrl: redirectUrl,
+        redirectMode: "POST",
+        callbackUrl: `http://localhost:5001/api/user/checkPayment/${merchantOrderId}/${userId}`,
+        mobileNumber: Mobile,
+        paymentInstrument: {
+          type: "PAY_PAGE",
+        },
+      };
+
+      // Generate signature for direct API
+      const payload = JSON.stringify(paymentPayload);
+      const base64Payload = Buffer.from(payload).toString('base64');
+      const stringToHash = base64Payload + '/pg/v1/pay' + SECRET_KEY;
+      const sha256Hash = crypto.createHash('sha256').update(stringToHash).digest('hex');
+      const signature = sha256Hash + '###' + 1;
+
+      try {
+        const directResponse = await axios.post(
+          PHONEPE_API_URL,
+          { request: base64Payload },
+          {
+            headers: {
+              "X-VERIFY": signature,
+              "Content-Type": "application/json"
+            },
+          }
+        );
+
+        console.log("PhonePe direct API response:", directResponse.data);
+        
+        const checkoutUrl = directResponse.data?.data?.instrumentResponse?.redirectInfo?.url;
+        
+        if (checkoutUrl) {
+          console.log("Payment URL generated successfully via direct API:", checkoutUrl);
+          return res.status(200).json({
+            orderId: merchantOrderId,
+            merchantID: merchantOrderId,
+            url: checkoutUrl,
+          });
+        } else {
+          console.error("Direct API also failed to return URL:", directResponse.data);
+          return res.status(500).json({ 
+            error: "PhonePe payment initialization failed",
+            details: "Both SDK and direct API approaches failed"
+          });
+        }
+      } catch (directApiError) {
+        console.error("Direct API also failed:", directApiError.message);
+        return res.status(500).json({ 
+          error: "PhonePe payment initialization failed",
+          details: directApiError.message
+        });
+      }
     } catch (error) {
       console.error("Payment Error:", error);
-      return res.status(500).json({ error: "Payment processing failed" });
+      console.error("Error stack:", error.stack);
+      
+      // Return more detailed error information
+      return res.status(500).json({ 
+        error: "Payment processing failed",
+        details: error.message,
+        type: error.constructor.name
+      });
     }
   }
 
@@ -113,10 +218,10 @@ class Transaction {
         merchantTransactionId: transaction._id.toString(),
         merchantUserId: userId,
         amount: amount * 100, // Convert to paise
-        redirectUrl: `https://nutribowl.org/PaymentSuccess?transactionId=${transaction._id}&userID=${userId}`,
+        redirectUrl: `https://nutribowl.org/payment-success?transactionId=${transaction._id}&userID=${userId}`,
 
 
-        callbackUrl: "https://nutribowl.org/api/user/checkPayment/" + transaction._id + "/" + userId,
+        callbackUrl: "http://localhost:5001/api/user/checkPayment/" + transaction._id + "/" + userId,
 
         mobileNumber: Mobile,
         paymentInstrument: {
