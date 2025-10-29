@@ -1,11 +1,10 @@
-// const transactionModel = require("../../Modal/User/phonepayModel");
 import axios from "axios";
 import crypto from 'crypto';
 
 const MERCHANT_ID = "M23XA8YTUO61B";
 const SECRET_KEY = "3079f6a3-6f25-4c47-bd4e-c581051ad263";  
 const PHONEPE_API_URL = "https://api.phonepe.com/apis/hermes/pg/v1/pay"; 
-const CALLBACK_URL = "http://localhost:5001";  
+const CALLBACK_URL = "https://nutribowl.org";  
 
 import transactionModel from "../models/PhonepeModel.js";
 
@@ -128,7 +127,7 @@ class Transaction {
         amount: amount * 100, // Convert to paise
         redirectUrl: redirectUrl,
         redirectMode: "POST",
-        callbackUrl: `http://localhost:5001/api/user/checkPayment/${merchantOrderId}/${userId}`,
+        callbackUrl: `https://nutribowl.org/api/user/checkPayment/${merchantOrderId}/${userId}`,
         mobileNumber: Mobile,
         paymentInstrument: {
           type: "PAY_PAGE",
@@ -221,7 +220,7 @@ class Transaction {
         redirectUrl: `https://nutribowl.org/payment-success?transactionId=${transaction._id}&userID=${userId}`,
 
 
-        callbackUrl: "http://localhost:5001/api/user/checkPayment/" + transaction._id + "/" + userId,
+        callbackUrl: "https://nutribowl.org/api/user/checkPayment/" + transaction._id + "/" + userId,
 
         mobileNumber: Mobile,
         paymentInstrument: {
