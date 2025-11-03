@@ -96,7 +96,7 @@ app.use('/uploads', express.static('uploads'));
 // app.get('/', (req, res) => {
 //   res.send('🚀 Server is running!');
 // });
-app.use(express.static(path.join(_dirname, 'build'))); // Change 'build' to your frontend folder if needed
+app.use(express.static(path.join(_dirname, 'build')));
 
 // Redirect all GET requests (except API routes) to the index.html file
 app.get("*", (req, res) => {
@@ -117,5 +117,4 @@ const PORT = process.env.PORT || 5001;
 app.listen(PORT, () => {
   // console.log(Server running on http://localhost:${PORT});
   console.log('JWT_EXPIRES_IN:', process.env.JWT_EXPIRES_IN);
-
 });

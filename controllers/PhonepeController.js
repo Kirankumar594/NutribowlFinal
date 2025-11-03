@@ -7,6 +7,7 @@ const PHONEPE_API_URL = "https://api.phonepe.com/apis/hermes/pg/v1/pay";
 const CALLBACK_URL = "https://nutribowl.org";  
 
 import transactionModel from "../models/PhonepeModel.js";
+import Checkout from "../models/CheckoutModel.js";
 
 import {
   StandardCheckoutClient,
@@ -288,6 +289,18 @@ class Transaction {
             await axios(JSON.parse(data.config))
             data.config = null
           }
+          // If an order was created before payment, mark it Confirmed
+          if (data.orderId && /^[0-9a-fA-F]{24}$/.test(data.orderId)) {
+            try {
+              await Checkout.findByIdAndUpdate(
+                data.orderId,
+                { status: 'Confirmed' },
+                { new: true }
+              );
+            } catch (e) {
+              console.error('Failed to update Checkout status to Confirmed:', e.message);
+            }
+          }
         }
         data.status = state;
         data = await data.save()
@@ -318,7 +331,21 @@ class Transaction {
     if (data) {
       data.status = state;
       if (state === 'COMPLETED') {
-        await axios(JSON.parse(data.config))
+        if (data.config) {
+          await axios(JSON.parse(data.config))
+        }
+        // If an order was created before payment, mark it Confirmed
+        if (data.orderId && /^[0-9a-fA-F]{24}$/.test(data.orderId)) {
+          try {
+            await Checkout.findByIdAndUpdate(
+              data.orderId,
+              { status: 'Confirmed' },
+              { new: true }
+            );
+          } catch (e) {
+            console.error('Failed to update Checkout status to Confirmed (callback):', e.message);
+          }
+        }
       }
       await data.save()
     }
