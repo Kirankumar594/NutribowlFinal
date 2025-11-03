@@ -44,6 +44,7 @@ class Transaction {
   async addPaymentPhone(req, res) {
 
     try {
+      console.log('[addPaymentPhone] body:', req.body);
       const { userId, username, Mobile, orderId, amount, config, successUrl, failedUrl } = req.body;
 
       // Validate required fields
@@ -54,7 +55,7 @@ class Transaction {
         });
       }
 
-      console.log("Creating transaction for user:", userId, "amount:", amount);
+      console.log("[addPaymentPhone] Creating transaction for user:", userId, "amount:", amount, 'orderId:', orderId);
 
       // Save transaction details in DB
       const data = await transactionModel.create({
@@ -73,17 +74,17 @@ class Transaction {
         return res.status(400).json({ error: "Failed to create transaction record" });
       }
 
-      console.log("Transaction created with ID:", data._id);
+      console.log("[addPaymentPhone] Transaction created with ID:", data._id);
 
       const merchantOrderId = data._id.toString(); // Use DB _id as unique order ID
 
       const redirectUrl = `https://nutribowl.org/payment-success?transactionId=${data._id}&userID=${userId}`;
 
-      console.log("Building payment request for merchantOrderId:", merchantOrderId);
+      console.log("[addPaymentPhone] Building payment request for merchantOrderId:", merchantOrderId);
 
       // Check if PhonePe client is initialized
       if (!client) {
-        console.error("PhonePe SDK client not initialized");
+        console.error("[addPaymentPhone] PhonePe SDK client not initialized");
         return res.status(500).json({ 
           error: "Payment service unavailable",
           details: "PhonePe SDK client initialization failed"
@@ -97,17 +98,17 @@ class Transaction {
         .redirectUrl(redirectUrl)
         .build();
 
-      console.log("Sending payment request to PhonePe...");
+      console.log("[addPaymentPhone] Sending payment request to PhonePe...");
 
       try {
         // Try SDK approach first
         const response = await client.pay(paymentRequest);
-        console.log("PhonePe SDK response:", response);
+        console.log("[addPaymentPhone] PhonePe SDK response:", response);
         
         const checkoutUrl = response.redirectUrl;
 
         if (checkoutUrl) {
-          console.log("Payment URL generated successfully via SDK:", checkoutUrl);
+          console.log("[addPaymentPhone] Payment URL generated successfully via SDK:", checkoutUrl);
           return res.status(200).json({
             orderId: response.orderId,
             merchantID: merchantOrderId,
@@ -115,11 +116,11 @@ class Transaction {
           });
         }
       } catch (sdkError) {
-        console.error("PhonePe SDK failed, trying direct API approach:", sdkError.message);
+        console.error("[addPaymentPhone] PhonePe SDK failed, trying direct API approach:", sdkError.message);
       }
 
       // Fallback to direct API approach
-      console.log("Using direct PhonePe API as fallback...");
+      console.log("[addPaymentPhone] Using direct PhonePe API as fallback...");
       
       const paymentPayload = {
         merchantId: MERCHANT_ID,
@@ -154,34 +155,34 @@ class Transaction {
           }
         );
 
-        console.log("PhonePe direct API response:", directResponse.data);
+        console.log("[addPaymentPhone] PhonePe direct API response:", directResponse.data);
         
         const checkoutUrl = directResponse.data?.data?.instrumentResponse?.redirectInfo?.url;
         
         if (checkoutUrl) {
-          console.log("Payment URL generated successfully via direct API:", checkoutUrl);
+          console.log("[addPaymentPhone] Payment URL generated successfully via direct API:", checkoutUrl);
           return res.status(200).json({
             orderId: merchantOrderId,
             merchantID: merchantOrderId,
             url: checkoutUrl,
           });
         } else {
-          console.error("Direct API also failed to return URL:", directResponse.data);
+          console.error("[addPaymentPhone] Direct API also failed to return URL:", directResponse.data);
           return res.status(500).json({ 
             error: "PhonePe payment initialization failed",
             details: "Both SDK and direct API approaches failed"
           });
         }
       } catch (directApiError) {
-        console.error("Direct API also failed:", directApiError.message);
+        console.error("[addPaymentPhone] Direct API also failed:", directApiError.message);
         return res.status(500).json({ 
           error: "PhonePe payment initialization failed",
           details: directApiError.message
         });
       }
     } catch (error) {
-      console.error("Payment Error:", error);
-      console.error("Error stack:", error.stack);
+      console.error("[addPaymentPhone] Payment Error:", error);
+      console.error("[addPaymentPhone] Error stack:", error.stack);
       
       // Return more detailed error information
       return res.status(500).json({ 
@@ -264,6 +265,7 @@ class Transaction {
 
   async updateStatuspayment(req, res) {
     try {
+      console.log('[updateStatuspayment] id:', req.params.id);
       let id = req.params.id;
       let data = await transactionModel.findById(id);
       if (!data) return res.status(400).json({ error: "Data not found" });
@@ -271,25 +273,29 @@ class Transaction {
       data.save();
       return res.status(200).json({ success: "Successfully Completed" });
     } catch (error) {
-      console.log(error);
+      console.log('[updateStatuspayment] error:', error);
     }
   }
 
   async checkPayment(req, res) {
     try {
+      console.log('[checkPayment] params:', req.params);
 
       let id = req.params.id;
       let userId = req.params.userId
       let data = await transactionModel.findById(id);
       if (!data) return res.status(400).json({ error: "Payment Id not found!" })
-      client.getOrderStatus(id).then(async (response) => {
-        const state = response.state;
-        if (state == "COMPLETED") {
+      // Helper to persist state and update related order
+      const persistState = async (state) => {
+        if (state === "COMPLETED") {
           if (data.config) {
-            await axios(JSON.parse(data.config))
-            data.config = null
+            try {
+              await axios(JSON.parse(data.config))
+              data.config = null
+            } catch (e) {
+              console.error('Config callback failed:', e.message)
+            }
           }
-          // If an order was created before payment, mark it Confirmed
           if (data.orderId && /^[0-9a-fA-F]{24}$/.test(data.orderId)) {
             try {
               await Checkout.findByIdAndUpdate(
@@ -303,36 +309,76 @@ class Transaction {
           }
         }
         data.status = state;
-        data = await data.save()
-        return res.status(200).json({ success: data })
-      }).catch((error) => {
-        return res.status(400).json({ error: error })
-      });
+        return await data.save();
+      }
+
+      // First try SDK if available
+      if (client && typeof client.getOrderStatus === 'function') {
+        try {
+          const response = await client.getOrderStatus(id);
+          console.log('[checkPayment] SDK getOrderStatus response:', response);
+          const state = response?.state || response?.data?.state || 'PENDING';
+          const saved = await persistState(state);
+          return res.status(200).json({ success: saved })
+        } catch (sdkErr) {
+          console.error('[checkPayment] SDK getOrderStatus failed, falling back to REST:', sdkErr?.message || sdkErr);
+        }
+      }
+
+      // Fallback to PhonePe REST status API
+      try {
+        const path = `/pg/v1/status/${MERCHANT_ID}/${id}`;
+        const stringToHash = path + SECRET_KEY;
+        const sha256Hash = crypto.createHash('sha256').update(stringToHash).digest('hex');
+        const xVerify = `${sha256Hash}###1`;
+
+        console.log('[checkPayment] REST status request path:', path);
+        const statusRes = await axios.get(`https://api.phonepe.com/apis/hermes${path}`, {
+          headers: {
+            'X-VERIFY': xVerify,
+            'X-MERCHANT-ID': MERCHANT_ID,
+            'Content-Type': 'application/json'
+          }
+        });
+
+        console.log('[checkPayment] REST status response:', statusRes.data);
+        const state = statusRes?.data?.data?.state || statusRes?.data?.data?.status || 'PENDING';
+        const saved = await persistState(state);
+        return res.status(200).json({ success: saved })
+      } catch (restErr) {
+        console.error('[checkPayment] REST status check failed:', restErr?.response?.data || restErr?.message || restErr);
+        return res.status(400).json({ error: 'Unable to verify payment status at this time.' })
+      }
 
     } catch (error) {
-      console.log(error)
+      console.log('[checkPayment] error:', error)
       return res.status(400).json({ error: error.message })
     }
   }
 
   async paymentcallback(req, res) {
+    console.log('[paymentcallback] body:', req.body);
     const { response } = req.body;
 
     const decodedStr = Buffer.from(response, 'base64').toString('utf-8');
 
     // Parse JSON
     const responseJson = JSON.parse(decodedStr);
-    console.log(responseJson?.data);
+    console.log('[paymentcallback] decoded data:', responseJson?.data);
     const { merchantTransactionId, state } = responseJson?.data;
 
     // Log the callback data for debugging
-    console.log(`Callback received: Transaction ${merchantTransactionId}, Status: ${state}`);
+    console.log(`[paymentcallback] Callback received: Transaction ${merchantTransactionId}, Status: ${state}`);
     let data = await transactionModel.findById(merchantTransactionId);
     if (data) {
       data.status = state;
       if (state === 'COMPLETED') {
         if (data.config) {
-          await axios(JSON.parse(data.config))
+          try {
+            await axios(JSON.parse(data.config))
+          } catch (e) {
+            console.error('[paymentcallback] config callback failed:', e.message)
+          }
         }
         // If an order was created before payment, mark it Confirmed
         if (data.orderId && /^[0-9a-fA-F]{24}$/.test(data.orderId)) {
@@ -343,7 +389,7 @@ class Transaction {
               { new: true }
             );
           } catch (e) {
-            console.error('Failed to update Checkout status to Confirmed (callback):', e.message);
+            console.error('[paymentcallback] Failed to update Checkout status to Confirmed (callback):', e.message);
           }
         }
       }
